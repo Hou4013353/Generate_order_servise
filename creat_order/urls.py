@@ -1,6 +1,5 @@
-from django.contrib import admin
 from django.urls import path
-from django.urls import include
+
 from creat_order import views
 
 urlpatterns = [
@@ -13,8 +12,8 @@ urlpatterns = [
     path('put_close_reason', views.put_close_reason.as_view()),
     path('reopen', views.reopen.as_view()),
     path('head_end_content', views.head_end_content.as_view()),
-    path('generate_order', views.generate_order.as_view())
-
+    path('generate_order', views.generate_order.as_view()),
+    path('search', views.search.as_view()),
 
 
 ]

@@ -1,10 +1,14 @@
-from django.shortcuts import render
-from django.http import HttpResponse, JsonResponse
-from django.views import View
-import base64
-from creat_order import models
-import json, datetime
+import datetime
+import json
 import re
+
+import jieba
+from django.db.models import Max, Min
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views import View
+
+from creat_order import models
 
 
 # 状态码
@@ -20,7 +24,7 @@ import re
 def check_session(request):
     session_islogin = request.session.get("is_login")
     uname = request.session.get("user_name")
-    # print(uname, session_islogin)
+    # print("SEESSION检查",uname, session_islogin)
     if session_islogin == 1:
         return uname
     else:
@@ -54,8 +58,7 @@ class login(View):
                 request.session["is_login"] = 1
                 request.session["user_name"] = uname
                 # 登录成功
-                return JsonResponse(data={"msg": "登录成功", "username": uname}, safe=False, status=200,
-                                    headers={"is_login": 1})
+                return JsonResponse(data={"msg": "登录成功", "username": uname}, safe=False, status=200)
             else:
                 return JsonResponse(data={"msg": "账号或密码错误"}, safe=False, status=202)
         except models.user_info.DoesNotExist as e:
@@ -71,22 +74,28 @@ class login(View):
 class get_card(View):
     def get(self, request):
         session_result = check_session(request)
+        page = int(request.GET.get("page"))
+        number_page = 10
         if session_result:
             user_obj = models.user_info.objects
-            customer_information_obj = models.customer_information.objects
+            # customer_information_obj = models.customer_information.objects
             order_status_obj = models.order_status.objects
-            customer_channel_obj = models.customer_channel.objects
+            # customer_channel_obj = models.customer_channel.objects
             close_reason_obj = models.close_reason.objects
             work_time_obj = models.work_time.objects
             aunt_type_obj = models.auntie_type.objects
             rest_mode_obj = models.rest_mode.objects
             uname = session_result
             user_id = user_obj.get(user_name=uname)
-            customer_Query = user_id.customer_information_set.all().order_by("-order_switch", "-customer_id")
-            # print(customer_Query)
+            customer_Query = user_id.customer_information_set.all().order_by("-order_switch", "-customer_id")[
+                             (page - 1) * number_page:page * number_page]
+            if customer_Query:
+                pass
+            else:
+                return JsonResponse(data={"msg": "到底了", "data": None}, safe=False, status=204)
+            print(page, customer_Query)
             customer_data = []
             for i in customer_Query:
-
                 connect = ""
                 custom_dict = {}
                 custom_dict["id"] = i.customer_id
@@ -98,8 +107,11 @@ class get_card(View):
                 custom_dict["poiname"] = i.poiname
                 if len(i.poiaddress) > 25:
                     custom_dict["poiaddress"] = i.poiaddress[6:31] + "..."
+                elif len(i.poiaddress) < 12:
+                    custom_dict["poiaddress"] = i.poiaddress
                 else:
                     custom_dict["poiaddress"] = i.poiaddress[6:]
+
                 custom_dict["order_switch"] = i.order_switch
                 try:
                     custom_dict["close_reason"] = close_reason_obj.get(close_reason_id=i.close_reson_id).close_reason
@@ -109,6 +121,8 @@ class get_card(View):
                 custom_dict["order_status"] = order_status_obj.get(order_status_id=i.order_status_id).order_status
                 custom_dict["aunt_type"] = aunt_type_obj.get(type_id=i.auntie_type_id).type
                 custom_dict["work_time"] = work_time_obj.get(worktime_id=i.type_of_work_id).worktime
+                if custom_dict["work_time"] == "白班":
+                    custom_dict["work_time"] = custom_dict["work_time"] + i.work_start_time + "-" + i.work_end_time
                 custom_dict["rest_mode"] = rest_mode_obj.get(rest_id=i.rest_mode_id).rest_value
 
                 customer_data.append(custom_dict)
@@ -207,7 +221,7 @@ class put_custom(View):
             if "detailed_address" not in form_data:
                 form_data["detailed_address"] = ""
             # Sql没写完，继续写录入时间
-            return_customer = customer_information_obj.create(customer_name=form_data["user_name"],
+            return_customer = customer_information_obj.create(customer_name=form_data["user_name"].strip(),
                                                               customer_phone=form_data["phone"],
                                                               cityname=complete_address["cityname"],
                                                               latlng_lat=complete_address["latlng"]["lat"],
@@ -221,7 +235,7 @@ class put_custom(View):
                                                               work_start_time=form_data["start_time"],
                                                               work_end_time=form_data["end_time"],
                                                               wx_num=form_data["wx_num"],
-                                                              registrant="admin", registration_time=registration_time(),
+                                                              registrant="admin",
                                                               assist_work_id=form_data["assist_work"],
                                                               auntie_type_id=form_data["defult_order"],
                                                               order_status_id=1,
@@ -286,10 +300,10 @@ class put_close_reason(View):
         user_obj = models.user_info.objects
         customer_obj = models.customer_information.objects
         customer_info = user_obj.get(user_name=user_name).customer_information_set.get(customer_id=card_id)
-        if "other_reason" not in chose_data:
-            chose_data["other_reason"] = ""
+        if "defult_reason" not in chose_data:
+            chose_data["defult_reason"] = ""
         customer_info.close_reson_id = chose_data["defult_chose"]
-        customer_info.other_reason = chose_data["other_reason"]
+        customer_info.other_reason = chose_data["defult_reason"]
         customer_info.order_switch = False
         customer_info.save()
         return JsonResponse(data={"msg": "成功"}, safe=False, status=200)
@@ -328,6 +342,7 @@ class head_end_content(View):
         data = {}
         data["head_value"] = head_content.head_value
         data["end_value"] = head_content.end_value
+        data["small_tail"] = head_content.small_tail_value
         return JsonResponse(safe=False, data=data, status=200)
 
     def post(self, request):
@@ -335,18 +350,21 @@ class head_end_content(View):
         user_name = request.session.get("user_name")
         head_word = request.POST.get("head_word")
         end_word = request.POST.get("end_word")
+        small_tail_word = request.POST.get("small_tail")
         user_obj = models.user_info.objects
         user_info = user_obj.get(user_name=user_name).user_id
-        user_asdas = 2
         head_content_obj = models.head_tail.objects
+        # 能获取到值，直接改就行了， 获取不到就新增
         try:
             head_content = head_content_obj.get(user_id=user_info)
             head_content.head_value = str(head_word)
             head_content.end_value = str(end_word)
+            head_content.small_tail_value = str(small_tail_word)
             head_content.registration_time = registration_time()
             head_content.save()
         except:
             head_content_obj.create(head_value=str(head_word), end_value=str(end_word),
+                                    small_tail_value=str(small_tail_word),
                                     registration_time=registration_time(),
                                     registrant="admin", user_id=user_info)
         return JsonResponse(safe=False, data={"msg": "成功"}, status=200)
@@ -354,7 +372,13 @@ class head_end_content(View):
 
 class generate_order(View):
     def get(self, request):
-        pass
+        uname = request.session["user_name"]
+        user_obj = models.user_info.objects
+        data = {}
+        data["min_value"] = user_obj.get(user_name=uname).customer_information_set.all().aggregate(Min("customer_id"))["customer_id__min"]
+        data["max_value"] = user_obj.get(user_name=uname).customer_information_set.all().aggregate(Max("customer_id"))["customer_id__max"]
+        print(data)
+        return JsonResponse(safe=False, data=data, status=200)
 
     def post(self, request):
         count = 0
@@ -362,18 +386,22 @@ class generate_order(View):
         order_data = ""
         uname = request.session["user_name"]
         carry_head = request.POST.get("carry_head_end")  # 是否携带头部
-        generate_order_type = request.POST.get("generate_order_type")   # 类型
-        customer_info = models.customer_information.objects.filter(order_switch=True).order_by("-customer_id")
+        generate_order_type = request.POST.get("generate_order_type")  # 类型
+        user_obj = models.user_info.objects
+        customer_info = user_obj.get(user_name=uname).customer_information_set.filter(order_switch=True).order_by(
+            "-customer_id")
         rest_mode_obj = models.rest_mode.objects
         work_time_obj = models.work_time.objects
         aunt_type_obj = models.auntie_type.objects
         head_obj = models.head_tail.objects
-        user_obj = models.user_info.objects
         head_content = head_obj.get(user_id=user_obj.get(user_name=uname).user_id)
         if int(generate_order_type) == 0:
-            order_count = request.POST.get("order_count")  # 生成几条
+            min_value = request.POST.get("min_value")
+            max_value = request.POST.get("max_value")
+            customer_info = user_obj.get(user_name=uname).customer_information_set.filter(customer_id__range=(min_value,max_value)).filter(order_switch=True).order_by(
+                "-customer_id")
         else:
-            order_count = len(customer_info)
+            pass
         for i in customer_info:
             poiadress = i.poiaddress.split("市")[1]
             try:
@@ -385,23 +413,99 @@ class generate_order(View):
                 work_time = "早{}晚{}".format(i.work_start_time, i.work_end_time)
                 pass
             count += 1
-            if count > int(order_count):
-                break
-            else:
-                order_str = "{count}、{separator}{poiname}({poiaddress})".format(count=i.customer_id, separator=separator,
-                                                                                poiname=i.poiname,
-                                                                                poiaddress=address, ) + "\n" + "{aunt_type},{work_money}元/{rest_mode}天,{work_time}".format(
-                    aunt_type=aunt_type_obj.get(type_id=i.auntie_type_id).type, work_money=i.work_money,
-                    rest_mode=rest_mode_obj.get(rest_id=i.rest_mode_id).rest_value,
-                    work_time=work_time, ) + "\n" + "{scop_of_work},{other_work}".format(
-                    scop_of_work=aunt_type_obj.get(type_id=i.auntie_type_id).scope_of_work,
-                    other_work=i.other_work
-                ) + "\n"
-                order_data = order_data + order_str + "\n"
+            order_str = "{count}、{separator}{poiname}({poiaddress})".format(count=i.customer_id,
+                                                                            separator=separator,
+                                                                            poiname=i.poiname,
+                                                                            poiaddress=address, ) + "\n" + "{aunt_type},{work_money}元/{rest_mode}天,{work_time}".format(
+                aunt_type=aunt_type_obj.get(type_id=i.auntie_type_id).type, work_money=i.work_money,
+                rest_mode=rest_mode_obj.get(rest_id=i.rest_mode_id).rest_value,
+                work_time=work_time, ) + "\n" + "{scop_of_work},{other_work}".format(
+                scop_of_work=aunt_type_obj.get(type_id=i.auntie_type_id).scope_of_work,
+                other_work=i.other_work
+            ) + "\n"
+            order_data = order_data + order_str + "\n"
+        order_data = order_data[:len(order_data) - 1]
         if int(carry_head) == 0:
-            order_data = head_content.head_value + "\n""\n" + order_data + head_content.end_value
+            order_data = head_content.head_value + "\n""\n" + order_data + "\n" + head_content.end_value
+        elif int(carry_head) == 1:
+            order_data = order_data + "\n" + head_content.small_tail_value
 
-        return JsonResponse(safe=False, data={"msg": "成功", "data": order_data}, status=200)
+        return JsonResponse(safe=False, data={"msg": "成功", "data": order_data,"order_num":len(customer_info)}, status=200)
+
+
+class search(View):
+    def get(self, requests):
+        response_data = requests.GET.get("data")
+        custom_obj = models.customer_information.objects
+        close_reason_obj = models.close_reason.objects
+        work_time_obj = models.work_time.objects
+        aunt_type_obj = models.auntie_type.objects
+        rest_mode_obj = models.rest_mode.objects
+        order_status_obj = models.order_status.objects
+        word_cut = jieba.lcut(response_data)
+        customer_data = []
+        query_list = []
+        query_str = ""
+        total_query = custom_obj.none()
+        # re.search(".*?[0-9]",word_cut).group()
+        for i in word_cut:
+            if i.isdigit():
+                phone_query = custom_obj.filter(customer_phone__contains=i)
+                id_query = custom_obj.filter(customer_id__contains=i)
+                result = phone_query | id_query
+            else:
+                result = custom_obj.filter(customer_name__contains=i)
+            query_list.append(result)
+
+        for j in query_list:
+            total_query = total_query | j
+
+        for k in total_query:
+            connect = ""
+            custom_dict = {}
+            custom_dict["id"] = k.customer_id
+            custom_dict["date"] = "{}-{}-{}".format(k.registration_time.year, k.registration_time.month,
+                                                    k.registration_time.day)
+            custom_dict["name"] = k.customer_name
+            custom_dict["phone"] = k.customer_phone
+            custom_dict["work_money"] = k.work_money
+            custom_dict["poiname"] = k.poiname
+            if len(k.poiaddress) > 25:
+                custom_dict["poiaddress"] = k.poiaddress[6:31] + "..."
+            elif len(k.poiaddress) < 12:
+                custom_dict["poiaddress"] = k.poiaddress
+            else:
+                custom_dict["poiaddress"] = k.poiaddress[6:]
+
+            custom_dict["order_switch"] = k.order_switch
+            try:
+                custom_dict["close_reason"] = close_reason_obj.get(close_reason_id=k.close_reson_id).close_reason
+            except models.close_reason.DoesNotExist:
+                pass
+            custom_dict["other_close_reason"] = k.other_reason
+            custom_dict["order_status"] = order_status_obj.get(order_status_id=k.order_status_id).order_status
+            custom_dict["aunt_type"] = aunt_type_obj.get(type_id=k.auntie_type_id).type
+            custom_dict["work_time"] = work_time_obj.get(worktime_id=k.type_of_work_id).worktime
+            if custom_dict["work_time"] == "白班":
+                custom_dict["work_time"] = custom_dict["work_time"] + k.work_start_time + "-" + k.work_end_time
+            custom_dict["rest_mode"] = rest_mode_obj.get(rest_id=k.rest_mode_id).rest_value
+            customer_data.append(custom_dict)
+            # print(customer_data)
+            print(customer_data)
+        return JsonResponse(data={"msg": "获取页面成功", "data": customer_data}, safe=False, status=200)
+
+
+
+    def post(self, requests):
+        pass
+
+
+class index(View):
+    def get(self, request):
+        return render(request, 'index.html')
+
+    def post(self, request):
+        pass
 
 # class put_custom(View):
 #     def get(self, request):
